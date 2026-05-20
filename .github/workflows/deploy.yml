@@ -114,6 +114,32 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
+            sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+
+            if ! command -v git >/dev/null 2>&1; then
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git
+            fi
+
+            if ! command -v docker >/dev/null 2>&1; then
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl
+              sudo install -m 0755 -d /etc/apt/keyrings
+              curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+              sudo chmod a+r /etc/apt/keyrings/docker.gpg
+              echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+              sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+              sudo usermod -aG docker "$USER" || true
+            fi
+
+            sudo systemctl enable docker
+            sudo systemctl start docker
+
+            if docker info >/dev/null 2>&1; then
+              docker_cmd() { docker "$@"; }
+            else
+              docker_cmd() { sudo docker "$@"; }
+            fi
+
             APP_DIR=~/rails_demo
             if [ ! -d "$APP_DIR/.git" ]; then
               git clone https://github.com/${{ github.repository }}.git "$APP_DIR"
@@ -123,6 +149,6 @@ jobs:
             export JWT_SECRET='${{ secrets.JWT_SECRET }}'
             export SECRET_KEY_BASE='${{ secrets.SECRET_KEY_BASE }}'
             export DOCKERHUB_USERNAME='${{ secrets.DOCKERHUB_USERNAME }}'
-            docker compose -f docker-compose.prod.yml pull
-            docker compose -f docker-compose.prod.yml up -d --remove-orphans
-            docker image prune -f
+            docker_cmd compose -f docker-compose.prod.yml pull
+            docker_cmd compose -f docker-compose.prod.yml up -d --remove-orphans
+            docker_cmd image prune -f
