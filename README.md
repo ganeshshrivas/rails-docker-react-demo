@@ -163,19 +163,24 @@ Workflow: `.github/workflows/deploy.yml`
 ### On push to `main` (after tests pass)
 
 1. Build and push Docker images to Docker Hub
-2. SSH into EC2, pull images, run `docker compose -f docker-compose.prod.yml up -d`
+2. SSH into EC2 and run `scripts/ec2-bootstrap.sh`, which on a **new machine** automatically:
+   - Installs `git`, `curl`, and Docker (Ubuntu/Debian **or** Amazon Linux)
+   - Installs Docker Compose if missing
+   - Logs in to Docker Hub
+   - Clones/updates the repo and starts `docker compose -f docker-compose.prod.yml`
 
 ### Required GitHub secrets
 
 | Secret | Description |
 |--------|-------------|
 | `DOCKERHUB_USERNAME` | Docker Hub username |
-| `DOCKERHUB_TOKEN` | Docker Hub access token |
+| `DOCKERHUB_TOKEN` | Docker Hub access token (pull private images on EC2) |
 | `EC2_HOST` | EC2 public IP or hostname |
-| `EC2_USER` | SSH user (e.g. `ubuntu`) |
-| `EC2_SSH_KEY` | Private SSH key (PEM contents) |
+| `EC2_USER` | SSH user (`ubuntu` on Ubuntu AMI, `ec2-user` on Amazon Linux) |
+| `EC2_SSH_KEY` | Private SSH key (PEM contents, not `authorized_keys`) |
 | `JWT_SECRET` | Production JWT secret |
 | `SECRET_KEY_BASE` | Production Rails secret |
+| `DEPLOY_GITHUB_TOKEN` | Optional: GitHub PAT to clone **private** repos on EC2 |
 
 ---
 
@@ -196,55 +201,26 @@ Workflow: `.github/workflows/deploy.yml`
 | 443 | TCP | 0.0.0.0/0 | HTTPS |
 | 3000 | TCP | Optional | Direct API debug only (not required behind Nginx) |
 
-### 3. Install Docker on EC2
+### 3. First deploy (automated)
+
+On a **fresh** EC2 instance you only need:
+
+1. Security group (step 2)
+2. GitHub secrets configured (see CI/CD section)
+3. Push to `main` — the deploy job installs dependencies, clones the repo, and starts the stack
+
+Manual setup (optional debugging):
 
 ```bash
-ssh ubuntu@<EC2_HOST>
-
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl git
-sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-sudo chmod a+r /etc/apt/keyrings/docker.gpg
-
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-sudo apt-get update
-sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-sudo usermod -aG docker $USER
-newgrp docker
-```
-
-### 4. Clone repository
-
-```bash
-git clone https://github.com/<your-org>/rails_demo.git ~/rails_demo
-cd ~/rails_demo
-cp .env.example .env
-```
-
-Edit `.env` with production secrets and add:
-
-```bash
-echo "DOCKERHUB_USERNAME=your_dockerhub_user" >> .env
-```
-
-### 5. Login to Docker Hub (on EC2)
-
-```bash
-docker login
-```
-
-### 6. Run production stack
-
-```bash
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
+ssh ubuntu@<EC2_HOST>   # or ec2-user@<EC2_HOST> on Amazon Linux
+cd ~/rails_demo && git pull
+export JWT_SECRET=... SECRET_KEY_BASE=... DOCKERHUB_USERNAME=... DOCKERHUB_TOKEN=...
+bash scripts/ec2-bootstrap.sh
 ```
 
 Visit `http://<EC2_PUBLIC_IP>`.
 
-### 7. Domain + HTTPS (recommended)
+### 4. Domain + HTTPS (recommended)
 
 Point your domain A record to the EC2 IP, then on EC2:
 
