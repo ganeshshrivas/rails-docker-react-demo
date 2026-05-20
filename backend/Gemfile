@@ -13,6 +13,8 @@ gem 'bootsnap', require: false
 
 group :development, :test do
   gem 'debug', platforms: %i[mri mingw x64_mingw]
+  # Rails 7.1 test runner is incompatible with Minitest 6 (line_filtering.rb ArgumentError)
+  gem 'minitest', '~> 5.25'
 end
 
 group :development do
