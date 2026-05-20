@@ -1,4 +1,4 @@
-  services:
+services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -41,7 +41,6 @@
     restart: unless-stopped
     ports:
       - '80:80'
-      - '3000:80'
     depends_on:
       - backend
 
