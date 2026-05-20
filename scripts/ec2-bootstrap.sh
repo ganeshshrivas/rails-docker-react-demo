@@ -45,7 +45,17 @@ pkg_install() {
 install_base_packages() {
   case "$PKG_MGR" in
     apt) pkg_install ca-certificates curl gnupg ;;
-    dnf|yum) pkg_install ca-certificates curl ;;
+    dnf|yum)
+      # Amazon Linux includes curl-minimal; do not install curl (conflicts).
+      local pkgs=()
+      rpm -q ca-certificates >/dev/null 2>&1 || pkgs+=(ca-certificates)
+      if ! command -v curl >/dev/null 2>&1; then
+        pkgs+=(curl-minimal)
+      fi
+      if [ "${#pkgs[@]}" -gt 0 ]; then
+        pkg_install "${pkgs[@]}"
+      fi
+      ;;
   esac
 }
 
