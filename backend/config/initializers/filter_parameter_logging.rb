@@ -1,0 +1,5 @@
+# frozen_string_literal: true
+
+Rails.application.config.filter_parameters += %i[
+  passw secret token crypt salt certificate otp ssn password password_confirmation
+]
