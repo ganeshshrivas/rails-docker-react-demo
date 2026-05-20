@@ -114,7 +114,11 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
-            cd ~/rails_demo
+            APP_DIR=~/rails_demo
+            if [ ! -d "$APP_DIR/.git" ]; then
+              git clone https://github.com/${{ github.repository }}.git "$APP_DIR"
+            fi
+            cd "$APP_DIR"
             git pull origin main
             export JWT_SECRET='${{ secrets.JWT_SECRET }}'
             export SECRET_KEY_BASE='${{ secrets.SECRET_KEY_BASE }}'
