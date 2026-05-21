@@ -1,4 +1,4 @@
-# Rails Demo — Full-Stack Production Starter
+# Rails Demo — Full-Stack Production Starter working demo
 
 Rails 7 API + React (Vite) + PostgreSQL + JWT auth, containerized with Docker and deployable to AWS EC2 via GitHub Actions.
 
