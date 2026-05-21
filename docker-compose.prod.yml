@@ -15,7 +15,7 @@ services:
       retries: 10
 
   backend:
-    image: ${DOCKERHUB_USERNAME}/rails-latest
+    image: ${DOCKERHUB_USERNAME}/rails_demo-backend:latest
     restart: unless-stopped
     depends_on:
       postgres:
@@ -33,7 +33,7 @@ services:
       - '3000'
 
   frontend:
-    image: ${DOCKERHUB_USERNAME}/rails_demo-frontend-latest
+    image: ${DOCKERHUB_USERNAME}/rails_demo-frontend:latest
     restart: unless-stopped
     ports:
       - '80:80'
