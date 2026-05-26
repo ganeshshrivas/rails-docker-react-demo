@@ -1,8 +1,13 @@
 name: CI/CD
 
+# Secrets: set defaults in Repository secrets. Override per environment
+# (staging / production) only when a value must differ. GitHub resolves
+# secrets.NAME as environment secret if present, otherwise repository secret.
+
 env:
   BACKEND_IMAGE_REPO: rails_demo-backend
   FRONTEND_IMAGE_REPO: rails_demo-frontend
+  DEFAULT_VITE_API_URL: /api
 
 on:
   push:
@@ -69,25 +74,13 @@ jobs:
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
           npm run test
 
-  build-and-push:
-    if: >-
-      github.event_name == 'push'
-      && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+  build-and-push-staging:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [test-backend, test-frontend]
     runs-on: ubuntu-latest
-    outputs:
-      image_tag: ${{ steps.deploy_target.outputs.image_tag }}
+    environment: staging
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set deploy image tag
-        id: deploy_target
-        run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            echo "image_tag=production" >> "$GITHUB_OUTPUT"
-          else
-            echo "image_tag=staging" >> "$GITHUB_OUTPUT"
-          fi
 
       - uses: docker/setup-buildx-action@v3
 
@@ -102,40 +95,74 @@ jobs:
           context: ./backend
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.BACKEND_IMAGE_REPO }}:${{ steps.deploy_target.outputs.image_tag }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.BACKEND_IMAGE_REPO }}:${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.BACKEND_IMAGE_REPO }}:staging
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.BACKEND_IMAGE_REPO }}:${{ github.sha }}
 
       - name: Build and push frontend
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
           push: true
-          build-args: VITE_API_URL=/api
+          build-args: |
+            VITE_API_URL=${{ secrets.VITE_API_URL || secrets.FRONTEND_API_URL || env.DEFAULT_VITE_API_URL }}
+
+  build-and-push-production:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [test-backend, test-frontend]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.FRONTEND_IMAGE_REPO }}:${{ steps.deploy_target.outputs.image_tag }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.FRONTEND_IMAGE_REPO }}:${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.BACKEND_IMAGE_REPO }}:production
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.BACKEND_IMAGE_REPO }}:${{ github.ref_name }}
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          build-args: |
+            VITE_API_URL=${{ secrets.VITE_API_URL || secrets.FRONTEND_API_URL || env.DEFAULT_VITE_API_URL }}
 
   deploy-staging:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: build-and-push
+    needs: build-and-push-staging
     runs-on: ubuntu-latest
     environment: staging
     steps:
       - name: Deploy to staging EC2
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          SECRET_KEY_BASE: ${{ secrets.SECRET_KEY_BASE }}
+          VITE_API_URL: ${{ secrets.VITE_API_URL || secrets.FRONTEND_API_URL || '/api' }}
+          FRONTEND_API_URL: ${{ secrets.FRONTEND_API_URL || secrets.VITE_API_URL || '/api' }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          envs: DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,JWT_SECRET,SECRET_KEY_BASE,VITE_API_URL,FRONTEND_API_URL
           script: |
             set -e
             export APP_DIR=~/rails_demo
             export DEPLOY_ENV=staging
             export GITHUB_REPO='${{ github.repository }}'
-            export JWT_SECRET='${{ secrets.JWT_SECRET }}'
-            export SECRET_KEY_BASE='${{ secrets.SECRET_KEY_BASE }}'
-            export DOCKERHUB_USERNAME='${{ secrets.DOCKERHUB_USERNAME }}'
-            export DOCKERHUB_TOKEN='${{ secrets.DOCKERHUB_TOKEN }}'
             export GITHUB_TOKEN='${{ secrets.DEPLOY_GITHUB_TOKEN }}'
 
             if command -v apt-get >/dev/null 2>&1; then
@@ -168,25 +195,29 @@ jobs:
 
   deploy-production:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: build-and-push
+    needs: build-and-push-production
     runs-on: ubuntu-latest
     environment: production
     steps:
       - name: Deploy to production EC2
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          SECRET_KEY_BASE: ${{ secrets.SECRET_KEY_BASE }}
+          VITE_API_URL: ${{ secrets.VITE_API_URL || secrets.FRONTEND_API_URL || '/api' }}
+          FRONTEND_API_URL: ${{ secrets.FRONTEND_API_URL || secrets.VITE_API_URL || '/api' }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          envs: DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,JWT_SECRET,SECRET_KEY_BASE,VITE_API_URL,FRONTEND_API_URL
           script: |
             set -e
             export APP_DIR=~/rails_demo
             export DEPLOY_ENV=production
             export GITHUB_REPO='${{ github.repository }}'
-            export JWT_SECRET='${{ secrets.JWT_SECRET }}'
-            export SECRET_KEY_BASE='${{ secrets.SECRET_KEY_BASE }}'
-            export DOCKERHUB_USERNAME='${{ secrets.DOCKERHUB_USERNAME }}'
-            export DOCKERHUB_TOKEN='${{ secrets.DOCKERHUB_TOKEN }}'
             export GITHUB_TOKEN='${{ secrets.DEPLOY_GITHUB_TOKEN }}'
 
             if command -v apt-get >/dev/null 2>&1; then

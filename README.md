@@ -189,33 +189,43 @@ git push origin v1.0.0
 
 ### GitHub configuration (step by step)
 
-#### 1. Repository secrets (shared by both environments)
+#### 1. Secrets (repository defaults + optional environment overrides)
 
-In **Settings → Secrets and variables → Actions → Repository secrets**:
+Put **shared defaults** in **Repository secrets**. Override any value on the **staging** or **production** environment only when it must differ (e.g. different `EC2_HOST` or `JWT_SECRET`).
 
-| Secret | Description |
-|--------|-------------|
-| `DOCKERHUB_USERNAME` | Docker Hub username |
-| `DOCKERHUB_TOKEN` | Docker Hub access token (push from CI, pull on EC2) |
+GitHub resolves `${{ secrets.NAME }}` on jobs with `environment: staging|production` as:
+
+1. Environment secret (if defined for that environment)
+2. Otherwise **repository secret**
+
+| Secret | Typical location | Description |
+|--------|------------------|-------------|
+| `DOCKERHUB_USERNAME` | Repository | Docker Hub username |
+| `DOCKERHUB_TOKEN` | Repository | Docker Hub access token |
+| `EC2_USER` | Repository | SSH user (`ubuntu` / `ec2-user`) |
+| `EC2_SSH_KEY` | Repository | SSH private key (PEM) |
+| `VITE_API_URL` | Repository | Frontend build API path (default `/api`) |
+| `FRONTEND_API_URL` | Repository | Alias for `VITE_API_URL` if not using `VITE_API_URL` |
+| `JWT_SECRET` | Repository or environment | JWT signing secret |
+| `SECRET_KEY_BASE` | Repository or environment | Rails secret key base |
+| `EC2_HOST` | **Environment** (per host) | EC2 IP or DNS — usually different per env |
+
+Do not create an environment secret with an **empty** value; it blocks the repository fallback. Remove the name from the environment if you want the repository value.
 
 #### 2. GitHub Environments
 
 In **Settings → Environments**, create two environments:
 
-**`staging`**
+**`staging`** and **`production`**
 
-| Secret | Description |
-|--------|-------------|
-| `EC2_HOST` | Staging EC2 public IP or DNS |
-| `EC2_USER` | SSH user (`ubuntu` or `ec2-user`) |
-| `EC2_SSH_KEY` | Private SSH key (PEM contents) |
-| `JWT_SECRET` | Staging-only JWT secret (≥ 32 chars) |
-| `SECRET_KEY_BASE` | Staging-only Rails secret (≥ 64 chars) |
-| `DEPLOY_GITHUB_TOKEN` | Optional: PAT to clone a **private** repo on EC2 |
+Use the **same secret names** as repository secrets. Only add a secret to an environment when it should **override** the repository value (required: `EC2_HOST` per server; optional: `JWT_SECRET`, `SECRET_KEY_BASE` if they differ).
 
-**`production`**
-
-Same secret **names**, different **values** (production EC2 host, production JWT/secret keys).
+| Secret | Override on environment? |
+|--------|---------------------------|
+| `EC2_HOST` | Yes — different IP per environment |
+| `JWT_SECRET`, `SECRET_KEY_BASE` | Optional — omit to use repository defaults |
+| `DOCKERHUB_*`, `EC2_USER`, `EC2_SSH_KEY`, `VITE_API_URL` | Usually repository only |
+| `DEPLOY_GITHUB_TOKEN` | Optional — repository or environment |
 
 Optional: enable **Required reviewers** on the `production` environment so releases need approval before deploy.
 
