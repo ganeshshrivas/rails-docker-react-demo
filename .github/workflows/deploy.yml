@@ -8,7 +8,7 @@ on:
   push:
     branches: [main]
     tags:
-      - '*'
+      - 'v*'
   pull_request:
     branches: [main]
 
@@ -75,8 +75,19 @@ jobs:
       && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
     needs: [test-backend, test-frontend]
     runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.deploy_target.outputs.image_tag }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set deploy image tag
+        id: deploy_target
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "image_tag=production" >> "$GITHUB_OUTPUT"
+          else
+            echo "image_tag=staging" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: docker/setup-buildx-action@v3
 
@@ -91,7 +102,7 @@ jobs:
           context: ./backend
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.BACKEND_IMAGE_REPO }}:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.BACKEND_IMAGE_REPO }}:${{ steps.deploy_target.outputs.image_tag }}
             ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.BACKEND_IMAGE_REPO }}:${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
 
       - name: Build and push frontend
@@ -101,74 +112,16 @@ jobs:
           push: true
           build-args: VITE_API_URL=/api
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.FRONTEND_IMAGE_REPO }}:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.FRONTEND_IMAGE_REPO }}:${{ steps.deploy_target.outputs.image_tag }}
             ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.FRONTEND_IMAGE_REPO }}:${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
 
-  tag-release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Deploy to EC2
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            set -e
-            export APP_DIR=~/rails_demo
-            export GITHUB_REPO='${{ github.repository }}'
-            export JWT_SECRET='${{ secrets.JWT_SECRET }}'
-            export SECRET_KEY_BASE='${{ secrets.SECRET_KEY_BASE }}'
-            export DOCKERHUB_USERNAME='${{ secrets.DOCKERHUB_USERNAME }}'
-            export DOCKERHUB_TOKEN='${{ secrets.DOCKERHUB_TOKEN }}'
-            export GITHUB_TOKEN='${{ secrets.DEPLOY_GITHUB_TOKEN }}'
-
-            # Minimal packages so we can clone the repo (full setup runs in scripts/ec2-bootstrap.sh).
-            # Amazon Linux ships curl-minimal; installing curl conflicts — only install git there.
-            if command -v apt-get >/dev/null 2>&1; then
-              sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
-              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl git
-            elif command -v dnf >/dev/null 2>&1; then
-              if ! command -v git >/dev/null 2>&1; then
-                sudo dnf install -y git
-              fi
-            elif command -v yum >/dev/null 2>&1; then
-              if ! command -v git >/dev/null 2>&1; then
-                sudo yum install -y git
-              fi
-            else
-              echo "No supported package manager (apt-get, dnf, yum) found." >&2
-              exit 1
-            fi
-
-            CLONE_URL="https://github.com/${GITHUB_REPO}.git"
-            if [ -n "${GITHUB_TOKEN:-}" ]; then
-              CLONE_URL="https://${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git"
-            fi
-
-            if [ ! -d "$APP_DIR/.git" ]; then
-              git clone "$CLONE_URL" "$APP_DIR"
-            fi
-            cd "$APP_DIR"
-            git fetch origin --tags
-            git checkout "${{ github.ref_name }}"
-
-            chmod +x scripts/ec2-bootstrap.sh
-            exec bash scripts/ec2-bootstrap.sh
-
-  deploy:
+  deploy-staging:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: build-and-push
     runs-on: ubuntu-latest
+    environment: staging
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Deploy to EC2
+      - name: Deploy to staging EC2
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -177,6 +130,7 @@ jobs:
           script: |
             set -e
             export APP_DIR=~/rails_demo
+            export DEPLOY_ENV=staging
             export GITHUB_REPO='${{ github.repository }}'
             export JWT_SECRET='${{ secrets.JWT_SECRET }}'
             export SECRET_KEY_BASE='${{ secrets.SECRET_KEY_BASE }}'
@@ -188,13 +142,9 @@ jobs:
               sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
               sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl git
             elif command -v dnf >/dev/null 2>&1; then
-              if ! command -v git >/dev/null 2>&1; then
-                sudo dnf install -y git
-              fi
+              command -v git >/dev/null 2>&1 || sudo dnf install -y git
             elif command -v yum >/dev/null 2>&1; then
-              if ! command -v git >/dev/null 2>&1; then
-                sudo yum install -y git
-              fi
+              command -v git >/dev/null 2>&1 || sudo yum install -y git
             else
               echo "No supported package manager (apt-get, dnf, yum) found." >&2
               exit 1
@@ -212,6 +162,56 @@ jobs:
             git fetch origin main
             git checkout main
             git pull origin main
+
+            chmod +x scripts/ec2-bootstrap.sh
+            exec bash scripts/ec2-bootstrap.sh
+
+  deploy-production:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy to production EC2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            export APP_DIR=~/rails_demo
+            export DEPLOY_ENV=production
+            export GITHUB_REPO='${{ github.repository }}'
+            export JWT_SECRET='${{ secrets.JWT_SECRET }}'
+            export SECRET_KEY_BASE='${{ secrets.SECRET_KEY_BASE }}'
+            export DOCKERHUB_USERNAME='${{ secrets.DOCKERHUB_USERNAME }}'
+            export DOCKERHUB_TOKEN='${{ secrets.DOCKERHUB_TOKEN }}'
+            export GITHUB_TOKEN='${{ secrets.DEPLOY_GITHUB_TOKEN }}'
+
+            if command -v apt-get >/dev/null 2>&1; then
+              sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl git
+            elif command -v dnf >/dev/null 2>&1; then
+              command -v git >/dev/null 2>&1 || sudo dnf install -y git
+            elif command -v yum >/dev/null 2>&1; then
+              command -v git >/dev/null 2>&1 || sudo yum install -y git
+            else
+              echo "No supported package manager (apt-get, dnf, yum) found." >&2
+              exit 1
+            fi
+
+            CLONE_URL="https://github.com/${GITHUB_REPO}.git"
+            if [ -n "${GITHUB_TOKEN:-}" ]; then
+              CLONE_URL="https://${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git"
+            fi
+
+            if [ ! -d "$APP_DIR/.git" ]; then
+              git clone "$CLONE_URL" "$APP_DIR"
+            fi
+            cd "$APP_DIR"
+            git fetch origin --tags
+            git checkout "${{ github.ref_name }}"
 
             chmod +x scripts/ec2-bootstrap.sh
             exec bash scripts/ec2-bootstrap.sh

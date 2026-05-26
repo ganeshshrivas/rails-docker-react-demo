@@ -5,27 +5,27 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: rails_demo_production
+      POSTGRES_DB: rails_demo_staging
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    healthcheck: 
+    healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U postgres']
       interval: 5s
       timeout: 5s
       retries: 10
 
   backend:
-    image: ${DOCKERHUB_USERNAME}/rails_demo-backend:production
+    image: ${DOCKERHUB_USERNAME}/rails_demo-backend:staging
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      RAILS_ENV: production
+      RAILS_ENV: staging
       DATABASE_HOST: postgres
       DATABASE_USERNAME: postgres
       DATABASE_PASSWORD: postgres
-      DATABASE_NAME: rails_demo_production
+      DATABASE_NAME: rails_demo_staging
       JWT_SECRET: ${JWT_SECRET}
       SECRET_KEY_BASE: ${SECRET_KEY_BASE}
       RAILS_LOG_TO_STDOUT: 'true'
@@ -33,7 +33,7 @@ services:
       - '3000'
 
   frontend:
-    image: ${DOCKERHUB_USERNAME}/rails_demo-frontend:production
+    image: ${DOCKERHUB_USERNAME}/rails_demo-frontend:staging
     restart: unless-stopped
     ports:
       - '80:80'

@@ -137,7 +137,8 @@ curl -X POST http://localhost/api/signup \
 | `DATABASE_USERNAME` | DB user (default `postgres`) |
 | `DATABASE_PASSWORD` | DB password (default `postgres`) |
 | `DATABASE_NAME` | Database name |
-| `RAILS_ENV` | `development`, `test`, or `production` |
+| `RAILS_ENV` | `development`, `test`, `staging`, or `production` |
+| `DEPLOY_ENV` | `staging` or `production` (EC2 deploy script only) |
 | `VITE_API_URL` | Frontend API base path (default `/api`) |
 
 ---
@@ -155,6 +156,15 @@ Configured in `frontend/nginx/default.conf`:
 
 Workflow: `.github/workflows/deploy.yml`
 
+### Environments
+
+| Environment | Trigger | Docker image tag | Compose file |
+|-------------|---------|------------------|--------------|
+| **Staging** | Push to `main` | `:staging` | `docker-compose.staging.yml` |
+| **Production** | Push tag `v*` (e.g. `v1.0.0`) | `:production` | `docker-compose.prod.yml` |
+
+Staging and production use **separate EC2 instances** and **separate secrets**. Images are tagged separately so a staging deploy never overwrites production images on Docker Hub.
+
 ### On every push / PR to `main`
 
 1. Run Rails tests (with Postgres service)
@@ -162,25 +172,87 @@ Workflow: `.github/workflows/deploy.yml`
 
 ### On push to `main` (after tests pass)
 
-1. Build and push Docker images to Docker Hub
-2. SSH into EC2 and run `scripts/ec2-bootstrap.sh`, which on a **new machine** automatically:
-   - Installs `git`, `curl`, and Docker (Ubuntu/Debian **or** Amazon Linux)
-   - Installs Docker Compose if missing
-   - Logs in to Docker Hub
-   - Clones/updates the repo and starts `docker compose -f docker-compose.prod.yml`
+1. Build and push images tagged `staging` (+ commit SHA)
+2. Deploy to the **staging** GitHub environment → staging EC2
 
-### Required GitHub secrets
+### On push of version tag `v*` (after tests pass)
+
+1. Build and push images tagged `production` (+ tag name)
+2. Deploy to the **production** GitHub environment → production EC2
+
+Release example:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+### GitHub configuration (step by step)
+
+#### 1. Repository secrets (shared by both environments)
+
+In **Settings → Secrets and variables → Actions → Repository secrets**:
 
 | Secret | Description |
 |--------|-------------|
 | `DOCKERHUB_USERNAME` | Docker Hub username |
-| `DOCKERHUB_TOKEN` | Docker Hub access token (pull private images on EC2) |
-| `EC2_HOST` | EC2 public IP or hostname |
-| `EC2_USER` | SSH user (`ubuntu` on Ubuntu AMI, `ec2-user` on Amazon Linux) |
-| `EC2_SSH_KEY` | Private SSH key (PEM contents, not `authorized_keys`) |
-| `JWT_SECRET` | Production JWT secret |
-| `SECRET_KEY_BASE` | Production Rails secret |
-| `DEPLOY_GITHUB_TOKEN` | Optional: GitHub PAT to clone **private** repos on EC2 |
+| `DOCKERHUB_TOKEN` | Docker Hub access token (push from CI, pull on EC2) |
+
+#### 2. GitHub Environments
+
+In **Settings → Environments**, create two environments:
+
+**`staging`**
+
+| Secret | Description |
+|--------|-------------|
+| `EC2_HOST` | Staging EC2 public IP or DNS |
+| `EC2_USER` | SSH user (`ubuntu` or `ec2-user`) |
+| `EC2_SSH_KEY` | Private SSH key (PEM contents) |
+| `JWT_SECRET` | Staging-only JWT secret (≥ 32 chars) |
+| `SECRET_KEY_BASE` | Staging-only Rails secret (≥ 64 chars) |
+| `DEPLOY_GITHUB_TOKEN` | Optional: PAT to clone a **private** repo on EC2 |
+
+**`production`**
+
+Same secret **names**, different **values** (production EC2 host, production JWT/secret keys).
+
+Optional: enable **Required reviewers** on the `production` environment so releases need approval before deploy.
+
+#### 3. EC2 instances
+
+Launch **two** instances (or reuse one only for staging while testing):
+
+| | Staging | Production |
+|---|---------|------------|
+| Purpose | Pre-release testing | Live traffic |
+| AMI | Ubuntu 24.04 LTS (recommended) | Same |
+| Security group | 22 (your IP), 80, 443 | Same |
+| App path on server | `~/rails_demo` | `~/rails_demo` |
+
+Generate secrets on your machine:
+
+```bash
+# JWT_SECRET (32+ random bytes, base64)
+openssl rand -base64 32
+
+# SECRET_KEY_BASE (64+ random bytes)
+openssl rand -hex 64
+```
+
+Use **different** values for staging and production.
+
+#### 4. First deploy
+
+1. Configure repository + environment secrets above.
+2. Push to `main` → staging deploy runs automatically.
+3. Tag a release → production deploy runs:
+
+   ```bash
+   git tag v1.0.0 && git push origin v1.0.0
+   ```
+
+On a fresh EC2 host, `scripts/ec2-bootstrap.sh` installs Docker, logs in to Docker Hub, pulls the correct `:staging` or `:production` images, and starts the stack.
 
 ---
 
@@ -206,19 +278,20 @@ Workflow: `.github/workflows/deploy.yml`
 On a **fresh** EC2 instance you only need:
 
 1. Security group (step 2)
-2. GitHub secrets configured (see CI/CD section)
-3. Push to `main` — the deploy job installs dependencies, clones the repo, and starts the stack
+2. GitHub environment secrets for **staging** or **production** (see CI/CD section)
+3. Push to `main` (staging) or push a `v*` tag (production)
 
 Manual setup (optional debugging):
 
 ```bash
 ssh ubuntu@<EC2_HOST>   # or ec2-user@<EC2_HOST> on Amazon Linux
 cd ~/rails_demo && git pull
+export DEPLOY_ENV=staging   # or production
 export JWT_SECRET=... SECRET_KEY_BASE=... DOCKERHUB_USERNAME=... DOCKERHUB_TOKEN=...
 bash scripts/ec2-bootstrap.sh
 ```
 
-Visit `http://<EC2_PUBLIC_IP>`.
+Visit `http://<EC2_PUBLIC_IP>` (staging host or production host).
 
 ### 4. Domain + HTTPS (recommended)
 

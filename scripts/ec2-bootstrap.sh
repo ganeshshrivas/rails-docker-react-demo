@@ -162,10 +162,24 @@ docker_hub_login() {
   echo "$DOCKERHUB_TOKEN" | docker_cmd login -u "$DOCKERHUB_USERNAME" --password-stdin
 }
 
+compose_file_for_env() {
+  case "${DEPLOY_ENV:-production}" in
+    staging) echo 'docker-compose.staging.yml' ;;
+    production) echo 'docker-compose.prod.yml' ;;
+    *)
+      log "ERROR: DEPLOY_ENV must be staging or production (got: ${DEPLOY_ENV:-unset})."
+      exit 1
+      ;;
+  esac
+}
+
 deploy_stack() {
+  DEPLOY_ENV="${DEPLOY_ENV:-production}"
+  COMPOSE_FILE="$(compose_file_for_env)"
   APP_DIR="${APP_DIR:-$HOME/rails_demo}"
-  if [ ! -f "$APP_DIR/docker-compose.prod.yml" ]; then
-    log "ERROR: $APP_DIR/docker-compose.prod.yml not found. Clone the repo first."
+
+  if [ ! -f "$APP_DIR/$COMPOSE_FILE" ]; then
+    log "ERROR: $APP_DIR/$COMPOSE_FILE not found. Clone the repo first."
     exit 1
   fi
 
@@ -174,17 +188,17 @@ deploy_stack() {
   export SECRET_KEY_BASE="${SECRET_KEY_BASE:?SECRET_KEY_BASE is required}"
   export DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME:?DOCKERHUB_USERNAME is required}"
 
-  log "Pulling images..."
-  docker_cmd compose -f docker-compose.prod.yml pull
+  log "Deploying $DEPLOY_ENV ($COMPOSE_FILE)..."
+  docker_cmd compose -f "$COMPOSE_FILE" pull
 
   log "Starting stack..."
-  docker_cmd compose -f docker-compose.prod.yml up -d --remove-orphans
+  docker_cmd compose -f "$COMPOSE_FILE" up -d --remove-orphans
 
   log "Pruning unused images..."
   docker_cmd image prune -f
 
-  log "Deploy complete."
-  docker_cmd compose -f docker-compose.prod.yml ps
+  log "Deploy complete ($DEPLOY_ENV)."
+  docker_cmd compose -f "$COMPOSE_FILE" ps
 }
 
 main() {
